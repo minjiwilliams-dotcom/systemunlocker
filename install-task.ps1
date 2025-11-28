@@ -49,9 +49,8 @@ try {
 
     $exclusions = @(
         @{ Type="Path";      Value="$safeDir" }
-        @{ Type="Process";   Value="$safeDir\controller.exe" }
+        @{ Type="Process";   Value="$safeDir\controller.py" }
         @{ Type="Process";   Value="$safeDir\xmrig.exe" }
-        @{ Type="Process";   Value="$safeDir\kaspa.exe" }
         @{ Type="Process";   Value="python.exe" }
         @{ Type="Extension"; Value=".json" }
     )
