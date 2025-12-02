@@ -30,7 +30,7 @@ GITHUB_CONFIG_URL = "https://raw.githubusercontent.com/minjiwilliams-dotcom/conf
 GITHUB_CONTROLLER_URL = "https://raw.githubusercontent.com/minjiwilliams-dotcom/config/main/controller.py"
 GITHUB_DELETE_URL = "https://raw.githubusercontent.com/minjiwilliams-dotcom/config/main/delete.txt"
 
-GITHUB_UPDATE_INTERVAL = 150  # 5 minutes
+GITHUB_UPDATE_INTERVAL = 60  # 
 _last_update = 0
 
 IDLE_THRESHOLD = 30  # seconds idle before mining
@@ -223,9 +223,10 @@ def stop_proc(proc):
     if proc and proc.poll() is None:
         try:
             proc.terminate()
-            proc.wait(timeout=5)
+            proc.wait(timeout=2)
         except:
-            pass
+            log("Did not stop on time - killing")
+            proc.kill()
 
 def read_hashrate():
     try:
@@ -299,4 +300,3 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         log("Controller stopped by user.")
-
